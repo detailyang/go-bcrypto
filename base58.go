@@ -1,6 +1,7 @@
 package bcrypto
 
 import (
+	"errors"
 	"math/big"
 )
 
@@ -9,8 +10,42 @@ const (
 )
 
 var (
-	big58 = big.NewInt(58)
-	big0  = big.NewInt(0)
+	big58               = big.NewInt(58)
+	big0                = big.NewInt(0)
+	alphabetLookupTable = [256]byte{
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 0, 1, 2, 3, 4, 5, 6,
+		7, 8, 255, 255, 255, 255, 255, 255,
+		255, 9, 10, 11, 12, 13, 14, 15,
+		16, 255, 17, 18, 19, 20, 21, 255,
+		22, 23, 24, 25, 26, 27, 28, 29,
+		30, 31, 32, 255, 255, 255, 255, 255,
+		255, 33, 34, 35, 36, 37, 38, 39,
+		40, 41, 42, 43, 255, 44, 45, 46,
+		47, 48, 49, 50, 51, 52, 53, 54,
+		55, 56, 57, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+	}
 )
 
 func Base58Encode(data []byte) string {
@@ -62,9 +97,41 @@ func bigintBase58Encode(data []byte) string {
 	return string(rv)
 }
 
-// func bigintBase58Decode(str string) ([]byte, error) {
+func bigintBase58Decode(str string) ([]byte, error) {
+	rv := big.NewInt(0)
+	j := big.NewInt(1)
 
-// }
+	for i := len(str) - 1; i >= 0; i-- {
+		base := alphabetLookupTable[byte(str[i])]
+		if base == 255 {
+			return nil, errors.New("invalid character")
+		}
+
+		// rv = rv + 58 ^ j * base
+		right := big.NewInt(int64(base))
+		right.Mul(j, right)
+		rv.Add(rv, right)
+		j.Mul(j, big58)
+	}
+
+	zcount := 0
+	for ; zcount < len(str) && str[zcount] == alphabet[0]; zcount++ {
+	}
+
+	bytes := rv.Bytes()
+	nbytes := len(bytes)
+	data := make([]byte, zcount+nbytes)
+
+	for i := 0; i < zcount+nbytes; i++ {
+		if i < zcount {
+			data[i] = 0
+		} else {
+			data[i] = bytes[i-zcount]
+		}
+	}
+
+	return data, nil
+}
 
 func trezorBase58Encode(data []byte) string {
 	ndata := len(data)
@@ -110,4 +177,8 @@ func trezorBase58Encode(data []byte) string {
 	}
 
 	return string(b58)
+}
+
+func trezorBase58Decode(str string) ([]byte, error) {
+	return nil, nil
 }

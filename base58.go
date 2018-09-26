@@ -1,12 +1,19 @@
 package bcrypto
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"errors"
 	"math/big"
 )
 
 const (
 	alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+)
+
+var (
+	ErrBadChecksum   = errors.New("invalid format: bad checksum")
+	ErrInvalidFormat = errors.New("invalid format: version and/or checksum bytes missing")
 )
 
 var (
@@ -48,29 +55,49 @@ var (
 	}
 )
 
-func Base58Encode(data []byte) string {
-	return bigintBase58Encode(data)
+func checksum(data []byte) []byte {
+	hash := sha256.Sum256(data)
+	hash = sha256.Sum256(hash[:])
+	return hash[:4]
 }
 
-/*
-   code_string = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-   x = convert_bytes_to_big_integer(hash_result);
+func Base58EncodeCheck(data []byte, version byte) string {
+	b := make([]byte, 0, 1+len(data)+4)
+	b = append(append(b, version), data...)
+	return Base58Encode(append(b, checksum(b)...))
+}
 
-   output_string = "";
+func Base58DecodeCheck(str string) ([]byte, byte, error) {
+	data, err := Base58Decode(str)
+	if err != nil {
+		return nil, 0, err
+	}
 
-   while(x > 0)
-   {
-       (x, remainder) = divide(x, 58);
-       output_string.append(code_string[remainder]);
-   }
+	ndata := len(data)
 
-   repeat(number_of_leading_zero_bytes_in_hash)
-   {
-       output_string.append(code_string[0]);
-   }
+	// version + data + checsum
+	if ndata < 5 {
+		return nil, 0, ErrInvalidFormat
+	}
 
-   output_string.reverse();
-*/
+	if !bytes.Equal(checksum(data[:ndata-4]), data[ndata-4:]) {
+		return nil, 0, ErrBadChecksum
+	}
+
+	return data[1 : ndata-4], data[0], nil
+}
+
+// Base58Encode represents base58 encode method
+func Base58Encode(data []byte) string {
+	return trezorBase58Encode(data)
+}
+
+// Base58Encode represents base58 decode method
+func Base58Decode(str string) ([]byte, error) {
+	return trezorBase58Decode(str)
+}
+
+// bigintBase58Encode use big.Int to implement base58 encode
 func bigintBase58Encode(data []byte) string {
 	b := new(big.Int).SetBytes(data)
 
@@ -97,9 +124,10 @@ func bigintBase58Encode(data []byte) string {
 	return string(rv)
 }
 
+// bigintBase58Encode use big.Int to implement base58 decode
 func bigintBase58Decode(str string) ([]byte, error) {
 	rv := big.NewInt(0)
-	j := big.NewInt(1)
+	nth := big.NewInt(1)
 
 	for i := len(str) - 1; i >= 0; i-- {
 		base := alphabetLookupTable[byte(str[i])]
@@ -107,11 +135,11 @@ func bigintBase58Decode(str string) ([]byte, error) {
 			return nil, errors.New("invalid character")
 		}
 
-		// rv = rv + 58 ^ j * base
+		// rv = rv + 58 ^ nth * base
 		right := big.NewInt(int64(base))
-		right.Mul(j, right)
+		right.Mul(nth, right)
 		rv.Add(rv, right)
-		j.Mul(j, big58)
+		nth.Mul(nth, big58)
 	}
 
 	zcount := 0
@@ -133,6 +161,8 @@ func bigintBase58Decode(str string) ([]byte, error) {
 	return data, nil
 }
 
+// trezorBase58Encode use fast algorithm to implement base58 encode
+// see https://github.com/trezor/trezor-crypto/blob/master/base58.c#L152
 func trezorBase58Encode(data []byte) string {
 	ndata := len(data)
 	zcount := 0
@@ -141,7 +171,7 @@ func trezorBase58Encode(data []byte) string {
 		zcount++
 	}
 
-	// log(256,2)/log(58,2)
+	// log(256,10)/log(58,10)
 	size := (ndata-zcount)*137/100 + 1
 	high := size - 1
 	j := size - 1
@@ -150,10 +180,8 @@ func trezorBase58Encode(data []byte) string {
 
 	for ; i < ndata; i++ {
 		carry := uint32(data[i])
-		j = size - 1
 
-		for ; j > high || carry != 0; j-- {
-			// b58 = b58 * 256 + ch
+		for j = size - 1; j > high || carry != 0; j-- {
 			carry += 256 * uint32(buf[j])
 			buf[j] = byte(carry % 58)
 			carry /= 58
@@ -167,18 +195,63 @@ func trezorBase58Encode(data []byte) string {
 
 	b58 := make([]byte, size-j+zcount)
 
-	for i = 0; j < size; i++ {
-		if i < zcount {
-			b58[i] = alphabet[0]
-		} else {
-			b58[i] = alphabet[buf[j]]
-			j++
-		}
+	for i = 0; i < zcount; i++ {
+		b58[i] = alphabet[0]
+	}
+
+	for i = zcount; j < size; i++ {
+		b58[i] = alphabet[buf[j]]
+		j++
 	}
 
 	return string(b58)
 }
 
+// trezorBase58Encode use fast algorithm to implement base58 decode
+// see https://github.com/trezor/trezor-crypto/blob/master/base58.c#L152
 func trezorBase58Decode(str string) ([]byte, error) {
-	return nil, nil
+	nstr := len(str)
+	zcount := 0
+
+	for zcount < nstr && str[zcount] == alphabet[0] {
+		zcount++
+	}
+
+	// log(58, 10)/log(256, 10)
+	size := (nstr-zcount)*733/1000 + 1
+	high := size - 1
+	j := size - 1
+	i := zcount
+	buf := make([]byte, size)
+
+	for ; i < nstr; i++ {
+		carry := uint32(alphabetLookupTable[str[i]])
+		if carry == 255 {
+			return nil, errors.New("invalid character")
+		}
+
+		for j = size - 1; j > high || carry != 0; j-- {
+			carry += 58 * uint32(buf[j])
+			buf[j] = byte(carry % 256)
+			carry /= 256
+		}
+
+		high = j
+	}
+
+	for j = 0; j < size && buf[j] == 0; j++ {
+	}
+
+	b256 := make([]byte, size-j+zcount)
+
+	for i = 0; i < zcount; i++ {
+		b256[i] = 0
+	}
+
+	for i = zcount; j < size; i++ {
+		b256[i] = buf[j]
+		j++
+	}
+
+	return b256, nil
 }

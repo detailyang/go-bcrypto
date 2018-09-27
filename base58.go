@@ -12,8 +12,12 @@ const (
 )
 
 var (
-	ErrBadChecksum   = errors.New("invalid format: bad checksum")
+	// ErrBadChecksum represents the checksum of data is not right
+	ErrBadChecksum = errors.New("invalid format: bad checksum")
+	// ErrInvalidFormat represents the encoded string format is not right
 	ErrInvalidFormat = errors.New("invalid format: version and/or checksum bytes missing")
+	// ErrInvalidCharacter represents the character of string is invalid
+	ErrInvalidCharacter = errors.New("invalid character")
 )
 
 var (
@@ -61,12 +65,16 @@ func checksum(data []byte) []byte {
 	return hash[:4]
 }
 
+// Base58EncodeCheck is used for encoding Bitcoin addresses
+// see https://en.bitcoin.it/wiki/Base58Check_encoding
 func Base58EncodeCheck(data []byte, version byte) string {
 	b := make([]byte, 0, 1+len(data)+4)
 	b = append(append(b, version), data...)
 	return Base58Encode(append(b, checksum(b)...))
 }
 
+// Base58DecodeCheck is used for decoding Bitcoin addresses
+// see https://en.bitcoin.it/wiki/Base58Check_encoding
 func Base58DecodeCheck(str string) ([]byte, byte, error) {
 	data, err := Base58Decode(str)
 	if err != nil {
@@ -132,7 +140,7 @@ func bigintBase58Decode(str string) ([]byte, error) {
 	for i := len(str) - 1; i >= 0; i-- {
 		base := alphabetLookupTable[byte(str[i])]
 		if base == 255 {
-			return nil, errors.New("invalid character")
+			return nil, ErrInvalidCharacter
 		}
 
 		// rv = rv + 58 ^ nth * base
@@ -227,7 +235,7 @@ func trezorBase58Decode(str string) ([]byte, error) {
 	for ; i < nstr; i++ {
 		carry := uint32(alphabetLookupTable[str[i]])
 		if carry == 255 {
-			return nil, errors.New("invalid character")
+			return nil, ErrInvalidCharacter
 		}
 
 		for j = size - 1; j > high || carry != 0; j-- {

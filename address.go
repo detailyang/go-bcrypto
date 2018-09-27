@@ -32,7 +32,7 @@ func NewAddress(kind AddressType, network Network, hash Hash) *Address {
 	}
 }
 
-// func (a Address) GeneratePrivateKey()
+// func (a Address) GeneratePrivateKey() PrivateKey
 
 // func (a *Address) String() string {
 

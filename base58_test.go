@@ -17,6 +17,19 @@ func TestMain(m *testing.M) {
 	os.Exit(retCode)
 }
 
+func TestBadBase58Decode(t *testing.T) {
+	data := "^abcd"
+	_, err := bigintBase58Decode(data)
+	if err != ErrInvalidCharacter {
+		t.Error("expect ErrInvalidCharacter")
+	}
+
+	_, err = trezorBase58Decode(data)
+	if err != ErrInvalidCharacter {
+		t.Error("expect ErrInvalidCharacter")
+	}
+}
+
 func TestBase58Encode(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -257,6 +270,7 @@ func TestBase58Check(t *testing.T) {
 	if err != ErrBadChecksum {
 		t.Error("Checkdecode test failed, expected ErrChecksum")
 	}
+
 	// case 2: invalid formats (string lengths below 5 mean the version byte and/or the checksum
 	// bytes are missing).
 	testString := ""
@@ -266,6 +280,11 @@ func TestBase58Check(t *testing.T) {
 		if err != ErrInvalidFormat {
 			t.Error("Checkdecode test failed, expected ErrInvalidFormat")
 		}
+	}
+
+	_, _, err = Base58DecodeCheck("^1234576")
+	if err != ErrInvalidCharacter {
+		t.Error("Checkdecode test failed, expected ErrInvalidCharacter")
 	}
 
 }

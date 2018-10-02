@@ -16,5 +16,5 @@ func NewSignatureFromBytes(data []byte) (*Signature, error) {
 }
 
 func (s *Signature) Verify(msg []byte, pubkey *Pubkey) bool {
-	return secp256k1.VerifyECDSASignature((*secp256k1.ECDSASignature)(s), msg, pubkey.Pk)
+	return secp256k1.VerifyECDSASignature((*secp256k1.ECDSASignature)(s), msg, pubkey.PK)
 }

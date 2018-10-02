@@ -1,6 +1,7 @@
 package bcrypto
 
 import (
+	"encoding/hex"
 	"errors"
 
 	secp256k1 "github.com/detailyang/go-bcrypto/secp256k1"
@@ -11,9 +12,11 @@ var (
 )
 
 type Pubkey struct {
-	Pk         *secp256k1.PublicKey
+	PK         *secp256k1.PublicKey
 	Compressed bool
 }
+
+// func NewPubkey()
 
 func NewPubkeyFromBytes(data []byte) (*Pubkey, error) {
 	pubkey, ok := secp256k1.PubkeyParse(data)
@@ -22,9 +25,21 @@ func NewPubkeyFromBytes(data []byte) (*Pubkey, error) {
 	}
 
 	return &Pubkey{
-		Pk:         pubkey,
+		PK:         pubkey,
 		Compressed: isCompressed(data),
 	}, nil
+}
+
+func (p *Pubkey) Hex() string {
+	return hex.EncodeToString((p.PK.Get()))
+}
+
+func (p *Pubkey) String() string {
+	return p.Hex()
+}
+
+func (p *Pubkey) IsCompressed() bool {
+	return isCompressed(p.PK.Get())
 }
 
 func isCompressed(bytes []byte) bool {

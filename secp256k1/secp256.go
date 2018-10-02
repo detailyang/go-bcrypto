@@ -69,6 +69,10 @@ func NewPublicKey() *PublicKey {
 	}
 }
 
+func (p *PublicKey) Get() []byte {
+	return C.GoBytes(unsafe.Pointer(p.pk), 64)
+}
+
 // Sign creates a recoverable ECDSA signature.
 // The produced signature is in the 65-byte [R || S || V] format where V is 0 or 1.
 //
@@ -245,4 +249,55 @@ func VerifyECDSASignature(sig *ECDSASignature, msg []byte,
 	)
 
 	return result == C.int(1)
+}
+
+func PubkeyCreate(privatekey []byte) ([]byte, bool) {
+	pubkey := &C.secp256k1_pubkey{}
+	success := C.secp256k1_ec_pubkey_create(
+		context,
+		pubkey,
+		cBuf(privatekey[:]))
+
+	return C.GoBytes(unsafe.Pointer(&pubkey.data[0]), 64), success == C.int(1)
+}
+
+func CreatePubkeyFromBytes(privatekey []byte, compressed bool) ([]byte, bool) {
+	pubkey := &C.secp256k1_pubkey{}
+	success := C.secp256k1_ec_pubkey_create(
+		context,
+		pubkey,
+		cBuf(privatekey[:]))
+	if success != C.int(1) {
+		return nil, false
+	}
+
+	flags := uint(C.SECP256K1_EC_UNCOMPRESSED)
+	if compressed {
+		flags = C.SECP256K1_EC_COMPRESSED
+	}
+
+	buflen := 65
+	buf := make([]byte, buflen)
+
+	success = C.secp256k1_ec_pubkey_serialize(
+		context,
+		cBuf(buf[:]),
+		(*C.ulong)(unsafe.Pointer(&buflen)),
+		pubkey,
+		(C.uint)(flags),
+	)
+
+	return C.GoBytes(unsafe.Pointer(&buf[0]), (C.int)(buflen)), success == C.int(1)
+}
+
+func cInt(n int) C.int {
+	return (C.int)(n)
+}
+
+func cUint(n uint) C.uint {
+	return (C.uint)(n)
+}
+
+func cBuf(goSlice []byte) *C.uchar {
+	return (*C.uchar)(unsafe.Pointer(&goSlice[0]))
 }

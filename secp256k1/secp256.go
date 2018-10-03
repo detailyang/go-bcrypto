@@ -21,12 +21,138 @@ package secp256k1
 typedef void (*callbackFunc) (const char* msg, void* data);
 extern void secp256k1GoPanicIllegal(const char* msg, void* data);
 extern void secp256k1GoPanicError(const char* msg, void* data);
+
+static int ecdsa_signature_parse_der_lax(const secp256k1_context* ctx, secp256k1_ecdsa_signature* sig, const unsigned char *input, size_t inputlen) {
+    size_t rpos, rlen, spos, slen;
+    size_t pos = 0;
+    size_t lenbyte;
+    unsigned char tmpsig[64] = {0};
+    int overflow = 0;
+
+    secp256k1_ecdsa_signature_parse_compact(ctx, sig, tmpsig);
+
+    if (pos == inputlen || input[pos] != 0x30) {
+        return 0;
+    }
+    pos++;
+
+    if (pos == inputlen) {
+        return 0;
+    }
+    lenbyte = input[pos++];
+    if (lenbyte & 0x80) {
+        lenbyte -= 0x80;
+        if (pos + lenbyte > inputlen) {
+            return 0;
+        }
+        pos += lenbyte;
+    }
+
+    if (pos == inputlen || input[pos] != 0x02) {
+        return 0;
+    }
+    pos++;
+
+    if (pos == inputlen) {
+        return 0;
+    }
+    lenbyte = input[pos++];
+    if (lenbyte & 0x80) {
+        lenbyte -= 0x80;
+        if (pos + lenbyte > inputlen) {
+            return 0;
+        }
+        while (lenbyte > 0 && input[pos] == 0) {
+            pos++;
+            lenbyte--;
+        }
+        if (lenbyte >= sizeof(size_t)) {
+            return 0;
+        }
+        rlen = 0;
+        while (lenbyte > 0) {
+            rlen = (rlen << 8) + input[pos];
+            pos++;
+            lenbyte--;
+        }
+    } else {
+        rlen = lenbyte;
+    }
+    if (rlen > inputlen - pos) {
+        return 0;
+    }
+    rpos = pos;
+    pos += rlen;
+
+    if (pos == inputlen || input[pos] != 0x02) {
+        return 0;
+    }
+    pos++;
+
+    if (pos == inputlen) {
+        return 0;
+    }
+    lenbyte = input[pos++];
+    if (lenbyte & 0x80) {
+        lenbyte -= 0x80;
+        if (pos + lenbyte > inputlen) {
+            return 0;
+        }
+        while (lenbyte > 0 && input[pos] == 0) {
+            pos++;
+            lenbyte--;
+        }
+        if (lenbyte >= sizeof(size_t)) {
+            return 0;
+        }
+        slen = 0;
+        while (lenbyte > 0) {
+            slen = (slen << 8) + input[pos];
+            pos++;
+            lenbyte--;
+        }
+    } else {
+        slen = lenbyte;
+    }
+    if (slen > inputlen - pos) {
+        return 0;
+    }
+    spos = pos;
+    pos += slen;
+
+    while (rlen > 0 && input[rpos] == 0) {
+        rlen--;
+        rpos++;
+    }
+    if (rlen > 32) {
+        overflow = 1;
+    } else {
+        memcpy(tmpsig + 32 - rlen, input + rpos, rlen);
+    }
+
+    while (slen > 0 && input[spos] == 0) {
+        slen--;
+        spos++;
+    }
+    if (slen > 32) {
+        overflow = 1;
+    } else {
+        memcpy(tmpsig + 64 - slen, input + spos, slen);
+    }
+
+    if (!overflow) {
+        overflow = !secp256k1_ecdsa_signature_parse_compact(ctx, sig, tmpsig);
+    }
+    if (overflow) {
+        memset(tmpsig, 0, 64);
+        secp256k1_ecdsa_signature_parse_compact(ctx, sig, tmpsig);
+    }
+    return 1;
+}
 */
 import "C"
 
 import (
-	"errors"
-	"math/big"
 	"unsafe"
 )
 
@@ -39,226 +165,82 @@ func init() {
 	C.secp256k1_context_set_error_callback(context, C.callbackFunc(C.secp256k1GoPanicError), nil)
 }
 
-var (
-	ErrInvalidMsgLen       = errors.New("invalid message length, need 32 bytes")
-	ErrInvalidSignatureLen = errors.New("invalid signature length")
-	ErrInvalidRecoveryID   = errors.New("invalid signature recovery id")
-	ErrInvalidKey          = errors.New("invalid private key")
-	ErrInvalidPubkey       = errors.New("invalid public key")
-	ErrSignFailed          = errors.New("signing failed")
-	ErrRecoverFailed       = errors.New("recovery failed")
-)
-
-type ECDSASignature struct {
-	sig *C.secp256k1_ecdsa_signature
-}
-
-func NewECDSASignature() *ECDSASignature {
-	return &ECDSASignature{
-		sig: &C.secp256k1_ecdsa_signature{},
-	}
-}
-
-type PublicKey struct {
-	pk *C.secp256k1_pubkey
-}
-
-func NewPublicKey() *PublicKey {
-	return &PublicKey{
-		pk: &C.secp256k1_pubkey{},
-	}
-}
-
-func (p *PublicKey) Get() []byte {
-	return C.GoBytes(unsafe.Pointer(p.pk), 64)
-}
-
-// Sign creates a recoverable ECDSA signature.
-// The produced signature is in the 65-byte [R || S || V] format where V is 0 or 1.
-//
-// The caller is responsible for ensuring that msg cannot be chosen
-// directly by an attacker. It is usually preferable to use a cryptographic
-// hash function on any input before handing it to this function.
-func Sign(msg []byte, seckey []byte) ([]byte, error) {
-	if len(msg) != 32 {
-		return nil, ErrInvalidMsgLen
-	}
-	if len(seckey) != 32 {
-		return nil, ErrInvalidKey
-	}
-	seckeydata := (*C.uchar)(unsafe.Pointer(&seckey[0]))
-	if C.secp256k1_ec_seckey_verify(context, seckeydata) != 1 {
-		return nil, ErrInvalidKey
+func CheckLowS(sig []byte) bool {
+	csig, ok := parseSignatureFromBytes(sig)
+	if !ok {
+		return false
 	}
 
+	return C.secp256k1_ecdsa_signature_normalize(context, nil, csig) == cInt(0)
+}
+
+func VerifySignature(pubkey, msg, sig []byte) bool {
+	csig, ok := parseSignatureFromBytes(sig)
+	if !ok {
+		return false
+	}
+
+	var cpubkey C.secp256k1_pubkey
+	rv := C.secp256k1_ec_pubkey_parse(
+		context,
+		&cpubkey,
+		cBuf(pubkey),
+		cUlong(uint(len(pubkey))),
+	)
+	if rv == cInt(0) {
+		return false
+	}
+
+	/**
+	 * libsecp256k1's ECDSA verification requires lower-S signatures, which have
+	 * not historically been enforced in Bitcoin, so normalize them first.
+	 */
+	C.secp256k1_ecdsa_signature_normalize(context, csig, csig)
+	return C.secp256k1_ecdsa_verify(context, csig, cBuf(msg), &cpubkey) == cInt(1)
+}
+
+func Signature(msg []byte, privatekey []byte, testCase uint32) ([]byte, bool) {
 	var (
-		msgdata   = (*C.uchar)(unsafe.Pointer(&msg[0]))
 		noncefunc = C.secp256k1_nonce_function_rfc6979
-		sigstruct C.secp256k1_ecdsa_recoverable_signature
-	)
-	if C.secp256k1_ecdsa_sign_recoverable(context, &sigstruct, msgdata, seckeydata, noncefunc, nil) == 0 {
-		return nil, ErrSignFailed
-	}
-
-	var (
-		sig     = make([]byte, 65)
-		sigdata = (*C.uchar)(unsafe.Pointer(&sig[0]))
-		recid   C.int
-	)
-	C.secp256k1_ecdsa_recoverable_signature_serialize_compact(context, sigdata, &recid, &sigstruct)
-	sig[64] = byte(recid) // add back recid to get 65 bytes sig
-	return sig, nil
-}
-
-// RecoverPubkey returns the public key of the signer.
-// msg must be the 32-byte hash of the message to be signed.
-// sig must be a 65-byte compact ECDSA signature containing the
-// recovery id as the last element.
-func RecoverPubkey(msg []byte, sig []byte) ([]byte, error) {
-	if len(msg) != 32 {
-		return nil, ErrInvalidMsgLen
-	}
-	if err := checkSignature(sig); err != nil {
-		return nil, err
-	}
-
-	var (
-		pubkey  = make([]byte, 65)
-		sigdata = (*C.uchar)(unsafe.Pointer(&sig[0]))
-		msgdata = (*C.uchar)(unsafe.Pointer(&msg[0]))
-	)
-	if C.secp256k1_ext_ecdsa_recover(context, (*C.uchar)(unsafe.Pointer(&pubkey[0])), sigdata, msgdata) == 0 {
-		return nil, ErrRecoverFailed
-	}
-	return pubkey, nil
-}
-
-// VerifySignature checks that the given pubkey created signature over message.
-// The signature should be in [R || S] format.
-func VerifySignature(pubkey, msg, signature []byte) bool {
-	if len(msg) != 32 || len(signature) != 64 || len(pubkey) == 0 {
-		return false
-	}
-	sigdata := (*C.uchar)(unsafe.Pointer(&signature[0]))
-	msgdata := (*C.uchar)(unsafe.Pointer(&msg[0]))
-	keydata := (*C.uchar)(unsafe.Pointer(&pubkey[0]))
-	return C.secp256k1_ext_ecdsa_verify(context, sigdata, msgdata, keydata, C.size_t(len(pubkey))) != 0
-}
-
-// DecompressPubkey parses a public key in the 33-byte compressed format.
-// It returns non-nil coordinates if the public key is valid.
-func DecompressPubkey(pubkey []byte) (x, y *big.Int) {
-	if len(pubkey) != 33 {
-		return nil, nil
-	}
-	var (
-		pubkeydata = (*C.uchar)(unsafe.Pointer(&pubkey[0]))
-		pubkeylen  = C.size_t(len(pubkey))
-		out        = make([]byte, 65)
-		outdata    = (*C.uchar)(unsafe.Pointer(&out[0]))
-		outlen     = C.size_t(len(out))
-	)
-	if C.secp256k1_ext_reencode_pubkey(context, outdata, outlen, pubkeydata, pubkeylen) == 0 {
-		return nil, nil
-	}
-	return new(big.Int).SetBytes(out[1:33]), new(big.Int).SetBytes(out[33:])
-}
-
-// CompressPubkey encodes a public key to 33-byte compressed format.
-func CompressPubkey(x, y *big.Int) []byte {
-	var (
-		pubkey     = S256().Marshal(x, y)
-		pubkeydata = (*C.uchar)(unsafe.Pointer(&pubkey[0]))
-		pubkeylen  = C.size_t(len(pubkey))
-		out        = make([]byte, 33)
-		outdata    = (*C.uchar)(unsafe.Pointer(&out[0]))
-		outlen     = C.size_t(len(out))
-	)
-	if C.secp256k1_ext_reencode_pubkey(context, outdata, outlen, pubkeydata, pubkeylen) == 0 {
-		panic("libsecp256k1 error")
-	}
-	return out
-}
-
-func checkSignature(sig []byte) error {
-	if len(sig) != 65 {
-		return ErrInvalidSignatureLen
-	}
-	if sig[64] >= 4 {
-		return ErrInvalidRecoveryID
-	}
-	return nil
-}
-
-func PubkeyParse(in []byte) (*PublicKey, bool) {
-	var in_len C.size_t = C.size_t(len(in))
-	pubkey := NewPublicKey()
-
-	ret := C.secp256k1_ec_pubkey_parse(
-		context,
-		pubkey.pk,
-		(*C.uchar)(unsafe.Pointer(&in[0])),
-		in_len,
+		sig       C.secp256k1_ecdsa_signature
 	)
 
-	if ret != C.int(1) {
+	var rv C.int
+
+	if testCase > 0 {
+		nonce := uint32(testCase)
+		rv = C.secp256k1_ecdsa_sign(
+			context,
+			&sig,
+			cBuf(msg),
+			cBuf(privatekey),
+			noncefunc,
+			unsafe.Pointer(&nonce))
+	} else {
+		rv = C.secp256k1_ecdsa_sign(
+			context,
+			&sig,
+			cBuf(msg),
+			cBuf(privatekey),
+			noncefunc,
+			nil)
+	}
+
+	if rv == cInt(0) {
 		return nil, false
 	}
 
-	return pubkey, true
-}
+	nsig := 72
+	sigBuf := make([]byte, nsig)
 
-// Converts a "lax DER"-encoded byte slice to a signature. This is basically
-// only useful for validating signatures in the Bitcoin blockchain from before
-// 2016. It should never be used in new applications. This library does not
-// support serializing to this "format"
-func SignatureParseDer(data []byte) (*ECDSASignature, bool) {
-	sig := NewECDSASignature()
-	ret := C.secp256k1_ecdsa_signature_parse_der(
+	rv = C.secp256k1_ecdsa_signature_serialize_der(
 		context,
-		sig.sig,
-		(*C.uchar)(unsafe.Pointer(&data[0])),
-		(C.size_t)(len(data)),
+		cBuf(sigBuf),
+		(*C.ulong)(unsafe.Pointer(&nsig)),
+		&sig,
 	)
 
-	if ret != C.int(1) {
-		return nil, false
-	}
-
-	return sig, true
-}
-
-// Verify an ECDSA signature. Return code is 1 for a correct signature,
-// or 0 if incorrect. To avoid accepting malleable signature, only ECDSA
-// signatures in lower-S form are accepted. If you need to accept ECDSA
-// sigantures from sources that do not obey this rule, apply
-// EcdsaSignatureNormalize() prior to validation (however, this results in
-// malleable signatures)
-func VerifyECDSASignature(sig *ECDSASignature, msg []byte,
-	pubkey *PublicKey) bool {
-
-	if len(msg) != 32 {
-		return false
-	}
-
-	result := C.secp256k1_ecdsa_verify(
-		context,
-		sig.sig,
-		(*C.uchar)(unsafe.Pointer(&msg[0])),
-		pubkey.pk,
-	)
-
-	return result == C.int(1)
-}
-
-func PubkeyCreate(privatekey []byte) ([]byte, bool) {
-	pubkey := &C.secp256k1_pubkey{}
-	success := C.secp256k1_ec_pubkey_create(
-		context,
-		pubkey,
-		cBuf(privatekey[:]))
-
-	return C.GoBytes(unsafe.Pointer(&pubkey.data[0]), 64), success == C.int(1)
+	return C.GoBytes(unsafe.Pointer(&sigBuf[0]), cInt(nsig)), rv == C.int(1)
 }
 
 func CreatePubkeyFromBytes(privatekey []byte, compressed bool) ([]byte, bool) {
@@ -288,6 +270,30 @@ func CreatePubkeyFromBytes(privatekey []byte, compressed bool) ([]byte, bool) {
 	)
 
 	return C.GoBytes(unsafe.Pointer(&buf[0]), (C.int)(buflen)), success == C.int(1)
+}
+
+func parseSignatureFromBytes(data []byte) (*C.secp256k1_ecdsa_signature, bool) {
+	if len(data) == 0 {
+		return nil, false
+	}
+
+	sig := &C.secp256k1_ecdsa_signature{}
+	ret := C.ecdsa_signature_parse_der_lax(
+		context,
+		sig,
+		(*C.uchar)(unsafe.Pointer(&data[0])),
+		(C.size_t)(len(data)),
+	)
+
+	if ret != C.int(1) {
+		return nil, false
+	}
+
+	return sig, true
+}
+
+func cUlong(n uint) C.ulong {
+	return (C.ulong)(n)
 }
 
 func cInt(n int) C.int {

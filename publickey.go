@@ -1,11 +1,20 @@
 package bcrypto
 
-import "encoding/hex"
+import (
+	"encoding/hex"
+
+	"github.com/detailyang/go-bcrypto/secp256k1"
+	. "github.com/detailyang/go-bprimitives"
+)
 
 type PublicKey []byte
 
 func NewPublicKey(d []byte) PublicKey {
 	return PublicKey(d)
+}
+
+func (p PublicKey) Verify(msg, sig []byte) bool {
+	return secp256k1.VerifySignature(p, msg, sig)
 }
 
 func (p PublicKey) Length() int {
@@ -20,6 +29,10 @@ func (p PublicKey) Length() int {
 	return 0
 }
 
+func (p PublicKey) ID() []byte {
+	return Hash160(p.Bytes())
+}
+
 func (p PublicKey) Hex() string {
 	return hex.EncodeToString(p)
 }
@@ -28,8 +41,14 @@ func (p PublicKey) String() string {
 	return p.Hex()
 }
 
+func (p PublicKey) Clone() PublicKey {
+	data := make([]byte, len(p))
+	copy(data, p)
+	return NewPublicKey(data)
+}
+
 func (p PublicKey) Bytes() []byte {
-	return p
+	return p.Clone()
 }
 
 func (p PublicKey) IsCompressed() bool {
